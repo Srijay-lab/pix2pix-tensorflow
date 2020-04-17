@@ -13,6 +13,9 @@
 <div>facades</div>
 <div id="facades"></div>
 
+<div>crag</div>
+<div id="crag"></div>
+
 <script src="deeplearn-0.3.15.js"></script>
 <script>
 
@@ -101,6 +104,19 @@ function main() {
     initial_input: "/facades-input.png",
     initial_output: "/facades-output.png",
     sheet_url: "/facades-sheet.jpg",
+  })
+
+  create_editor({
+    name: "crag",
+    weights_url: "/models/crag_gan_BtoA.pict",
+    mode: "circle",
+    colors: {
+      glands: "#343434",
+    },
+    clear: "#000000",
+    draw: "#343434",
+    initial_input: "/crag-input.png",
+    initial_output: "/crag-output.png",
   })
 
   window.requestAnimationFrame(frame)
@@ -419,7 +435,7 @@ Editor.prototype = {
             this.buffer.stroke()
             this.buffer.closePath()
           }
-        } else {
+        } else if (this.config.mode == "rect") {
           if (v.contains(drag_start)) {
             var start = v.relative(drag_start)
             var end = v.relative(mouse_pos)
@@ -436,6 +452,30 @@ Editor.prototype = {
               this.push_buffer()
               this.buffer.fillStyle = this.config.draw
               this.buffer.fillRect(start.x, start.y, width, height)
+              v.ctx.drawImage(this.buffer.canvas, 0, 0, v.f.width, v.f.height)
+            }
+          }
+        }
+        else {
+           if (v.contains(drag_start)) {
+            var start = v.relative(drag_start)
+            var end = v.relative(mouse_pos)
+            var width = end.x - start.x
+            var height = end.y - start.y
+            var sAngle = 0
+            var eAngle = 2*Math.PI
+
+            if (mouse_down) {
+              v.ctx.save()
+              v.ctx.arc(start.x, start.y, width, 0*Math.PI, 2*Math.PI)
+              v.ctx.fillStyle = this.config.draw
+              v.ctx.fill()
+              v.ctx.restore()
+            } else if (mouse_released) {
+              this.push_buffer()
+              this.buffer.fillStyle = this.config.draw
+              this.buffer.arc(start.x, start.y, width, 0*Math.PI, 2*Math.PI)
+              this.buffer.fill()
               v.ctx.drawImage(this.buffer.canvas, 0, 0, v.f.width, v.f.height)
             }
           }
