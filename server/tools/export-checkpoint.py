@@ -60,7 +60,13 @@ def main():
         arrays = []
         for name in names:
             value = manifest[name]
-            with open(os.path.join(tmp_dir, value["filename"]), "rb") as f:
+            fname = value["filename"]
+            if(fname == "generator_decoder_6_batch_normalization_gamma"):
+                fname = "generator_decoder_5_batch_normalization_gamma"
+            if(fname == "generator_encoder_6_batch_normalization_gamma"):
+                fname = "generator_encoder_5_batch_normalization_gamma"
+            path = os.path.join(tmp_dir, fname)
+            with open(path, "rb") as f:
                 arr = np.frombuffer(f.read(), dtype=np.float32).copy().reshape(value["shape"])
                 arrays.append(arr)
 

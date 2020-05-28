@@ -314,6 +314,8 @@ def load_examples():
     paths_batch, inputs_batch, targets_batch = tf.train.batch([paths, input_images, target_images], batch_size=a.batch_size)
     steps_per_epoch = int(math.ceil(len(input_paths) / a.batch_size))
 
+    print(steps_per_epoch)
+
     return Examples(
         paths=paths_batch,
         inputs=inputs_batch,
@@ -369,6 +371,7 @@ def create_generator(generator_inputs, generator_outputs_channels):
                 input = layers[-1]
             else:
                 input = tf.concat([layers[-1], layers[skip_layer]], axis=3)
+                #input = layers[-1]
 
             rectified = tf.nn.relu(input)
             # [batch, in_height, in_width, in_channels] => [batch, in_height*2, in_width*2, out_channels]
