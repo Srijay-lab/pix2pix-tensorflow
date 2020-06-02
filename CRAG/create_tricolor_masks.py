@@ -5,10 +5,10 @@ import matplotlib.pyplot as plt
 import matplotlib
 import glob
 
-folder_path = "F:/Datasets/CRAG_LabServer/Train/Grades/3"
+folder_path = "F:/Datasets/CRAG_LabServer/Test/Grades/3"
 masks_input_folder = os.path.join(folder_path, "masks")
 images_input_folder = os.path.join(folder_path, "images")
-outdir = "F:/Datasets/CRAG_LabServer/Train/Grades/3/color_masks"
+outdir = "F:/Datasets/CRAG_LabServer/Test/Grades/3/color_masks"
 
 if not os.path.exists(outdir):
         os.makedirs(outdir)

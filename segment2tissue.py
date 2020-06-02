@@ -46,7 +46,7 @@ parser.add_argument("--no_flip", dest="flip", action="store_false", help="don't 
 parser.set_defaults(flip=True)
 parser.add_argument("--lr", type=float, default=0.0002, help="initial learning rate for adam")
 parser.add_argument("--beta1", type=float, default=0.5, help="momentum term of adam")
-parser.add_argument("--l1_weight", type=float, default=100.0, help="weight on L1 term for generator gradient")
+parser.add_argument("--l1_weight", type=float, default=500.0, help="weight on L1 term for generator gradient")
 parser.add_argument("--gan_weight", type=float, default=1.0, help="weight on GAN term for generator gradient")
 
 # export options
@@ -56,7 +56,7 @@ a = parser.parse_args()
 EPS = 1e-12
 CROP_SIZE = 256
 
-Examples = collections.namedtuple("Examples", "paths, inputs, targets, count, steps_per_epoch")
+Examples = collections.namedtuple("Examples", "paths, inputs, targets, weights, count, steps_per_epoch")
 Model = collections.namedtuple("Model",
                                "outputs, predict_real, predict_fake, discrim_loss, discrim_grads_and_vars, gen_loss_GAN, gen_loss_L1, gen_grads_and_vars, train")
 
@@ -316,13 +316,32 @@ def load_examples():
         r = tf.image.resize_images(r, [a.scale_size, a.scale_size], method=tf.image.ResizeMethod.AREA)
         return r
 
+    def get_weights(input_images):
+        inp = deprocess(tf.round(input_images))
+        inp = tf.dtypes.cast(inp, tf.int32)
+        elem = [0, 1, 0]
+        const = tf.stack([elem] * a.scale_size)
+        const = tf.stack([const] * a.scale_size)
+        const = tf.dtypes.cast(const, tf.bool)
+        img_bool = tf.dtypes.cast(inp, tf.bool)
+        weight = tf.math.logical_not(tf.math.logical_xor(img_bool, const))
+        weight = tf.dtypes.cast(weight, tf.int32)
+        weight = tf.reduce_sum(weight, axis=2)
+        weight = tf.repeat(weight, repeats=3, axis=1)
+        weight = tf.reshape(weight, [a.scale_size, a.scale_size, 3])
+        weight = tf.dtypes.cast(weight, tf.float32)
+        return weight
+
     with tf.name_scope("input_images"):
         input_images = transform(inputs)
+
+    with tf.name_scope("weights"):
+        image_weights = get_weights(input_images)
 
     with tf.name_scope("target_images"):
         target_images = transform(targets)
 
-    paths_batch, inputs_batch, targets_batch = tf.train.batch([paths, input_images, target_images],
+    paths_batch, inputs_batch, targets_batch, weights_batch = tf.train.batch([paths, input_images, target_images, image_weights],
                                                               batch_size=a.batch_size)
 
     steps_per_epoch = int(math.ceil(len(input_paths) / a.batch_size))
@@ -331,6 +350,7 @@ def load_examples():
         paths=paths_batch,
         inputs=inputs_batch,
         targets=targets_batch,
+        weights=weights_batch,
         count=len(input_paths),
         steps_per_epoch=steps_per_epoch,
     )
@@ -346,6 +366,7 @@ def create_generator(generator_inputs, generator_outputs_channels):
         strides = [1, 1, 1, 1]
         output = tf.nn.conv2d(generator_inputs, filter, strides=strides, padding='VALID')
         output = lrelu(output, 0.2)
+        output = batchnorm(output)
         layers.append(output)
 
     # encoder_1: [batch, 256, 256, in_channels] => [batch, 128, 128, ngf]
@@ -450,7 +471,7 @@ def extract_patches_inverse(x, y):
     return tf.gradients(_y, _x, grad_ys=y)[0] / grad
 
 
-def create_model(inputs, targets):
+def create_model(inputs, targets, weights):
 
     #Pad inputs to make shape to handle edge patches, so as we can give context as input to generator (context around target patch)
     inputs_bounded = tf.image.pad_to_bounding_box(inputs, 20, 20, 768, 768)
@@ -531,13 +552,13 @@ def create_model(inputs, targets):
         # minimizing -tf.log will try to get inputs to 1
         # predict_real => 1
         # predict_fake => 0
-        discrim_loss = tf.reduce_mean(-(tf.log(predict_real + EPS) + tf.log(1 - predict_fake + EPS)))
+        discrim_loss = tf.reduce_mean(-(tf.log(tf.clip_by_value((predict_real + EPS),1e-12,1.0)) + tf.log(tf.clip_by_value((1 - predict_fake + EPS),1e-12,1.0))))
 
     with tf.name_scope("generator_loss"):
         # predict_fake => 1
         # abs(targets - outputs) => 0
-        gen_loss_GAN = tf.reduce_mean(-tf.log(predict_fake + EPS))
-        gen_loss_L1 = tf.reduce_mean(tf.abs(targets - outputs))
+        gen_loss_GAN = tf.reduce_mean(-tf.log(tf.clip_by_value((predict_fake + EPS),1e-12,1.0)))
+        gen_loss_L1 = tf.reduce_mean(tf.math.multiply(tf.abs(targets - outputs),weights)) #weighted loss
         gen_loss = gen_loss_GAN * a.gan_weight + gen_loss_L1 * a.l1_weight
 
     with tf.name_scope("discriminator_train"):
@@ -712,7 +733,7 @@ def main():
     examples = load_examples()
 
     # inputs and targets are [batch_size, height, width, channels]
-    model = create_model(examples.inputs, examples.targets)
+    model = create_model(examples.inputs, examples.targets, examples.weights)
 
     # undo colorization splitting on images that we use for display/output
     if a.lab_colorization:
@@ -767,6 +788,7 @@ def main():
         }
 
     # summaries
+    '''
     with tf.name_scope("inputs_summary"):
         tf.summary.image("inputs", converted_inputs)
 
@@ -781,6 +803,7 @@ def main():
 
     with tf.name_scope("predict_fake_summary"):
         tf.summary.image("predict_fake", tf.image.convert_image_dtype(model.predict_fake, dtype=tf.uint8))
+    '''
 
     tf.summary.scalar("discriminator_loss", model.discrim_loss)
     tf.summary.scalar("generator_loss_GAN", model.gen_loss_GAN)

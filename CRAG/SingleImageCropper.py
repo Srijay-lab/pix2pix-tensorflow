@@ -4,13 +4,13 @@ from PIL import Image
 import matplotlib.pyplot as plt
 import numpy as np
 
-path = "F:/Datasets/CRAG_LabServer/Test/Grades/2/728_cropped/check_single_big_image/image.png"
-output_dir = "F:/Datasets/CRAG_LabServer/Test/Grades/2/728_cropped/check_single_big_image/images"
+path = "F:/Datasets/CRAG_LabServer/Test/Grades/1/1436_cropped/check_single_big_image/image.png"
+output_dir = "F:/Datasets/CRAG_LabServer/Test/Grades/1/1436_cropped/check_single_big_image/images"
 
 patchsize = 296
 stride = 236
-if_pad = 1
-new_size = (768,768)
+if_pad = 0
+new_size = (1476,1476)
 
 if not os.path.exists(output_dir):
         os.makedirs(output_dir)

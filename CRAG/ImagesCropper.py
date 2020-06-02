@@ -3,11 +3,11 @@ import os
 from PIL import Image
 import numpy as np
 
-folder_path = "F:/Datasets/CRAG_LabServer/Train/Grades/3"
-masks_input_folder = os.path.join(folder_path, "color_masks")
+folder_path = "F:/Datasets/CRAG_LabServer/Train/Grades/1/Two_Parallel_AFROS/glands"
+masks_input_folder = os.path.join(folder_path, "masks")
 images_input_folder = os.path.join(folder_path, "images")
 
-output_dir = "F:/Datasets/CRAG_LabServer/Train/Grades/3/728_cropped"
+output_dir = "F:/Datasets/CRAG_LabServer/Train/Grades/1/Two_Parallel_AFROS/glands/728_cropped"
 masks_output_folder = os.path.join(output_dir, "masks")
 images_output_folder = os.path.join(output_dir, "images")
 
@@ -19,6 +19,8 @@ if not os.path.exists(images_output_folder):
 #resize_len = 1500
 patch_size = 728
 stride = 300
+max_background_threshold = 20
+mbt_index = 0
 
 def CropImage(imgname):
 
@@ -37,9 +39,10 @@ def CropImage(imgname):
 
     #return np.mean(im_np)
 
-    if(np.mean(im_np) <= 50):
-        #return
-        k=1
+    if(np.mean(im_np) <= 10):
+        if(mbt_index >= max_background_threshold):
+            return
+        mbt_index = mbt_index+1
 
     width, height = mask_im.size
 
