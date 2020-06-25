@@ -31,8 +31,8 @@ parser.add_argument("--max_epochs", type=int, help="number of training epochs")
 parser.add_argument("--summary_freq", type=int, default=10000, help="update summaries every summary_freq steps")
 parser.add_argument("--progress_freq", type=int, default=50, help="display progress every progress_freq steps")
 parser.add_argument("--trace_freq", type=int, default=0, help="trace execution every trace_freq steps")
-parser.add_argument("--display_freq", type=int, default=0, help="write current training images every display_freq steps")
-parser.add_argument("--save_freq", type=int, default=500, help="save model every save_freq steps, 0 to disable")
+parser.add_argument("--display_freq", type=int, default=1000, help="write current training images every display_freq steps")
+parser.add_argument("--save_freq", type=int, default=1000, help="save model every save_freq steps, 0 to disable")
 parser.add_argument("--separable_conv", action="store_true", help="use separable convolutions in the generator")
 parser.add_argument("--aspect_ratio", type=float, default=1.0, help="aspect ratio of output images (width/height)")
 parser.add_argument("--lab_colorization", action="store_true", help="split input image into brightness (A) and color (B)")
@@ -40,13 +40,13 @@ parser.add_argument("--batch_size", type=int, default=1, help="number of images 
 parser.add_argument("--which_direction", type=str, default="BtoA", choices=["AtoB", "BtoA"])
 parser.add_argument("--ngf", type=int, default=64, help="number of generator filters in first conv layer")
 parser.add_argument("--ndf", type=int, default=64, help="number of discriminator filters in first conv layer")
-parser.add_argument("--scale_size", type=int, default=728, help="scale images to this size before cropping to 256x256")
+parser.add_argument("--scale_size", type=int, default=1436, help="scale images to this size before cropping to 256x256")
 parser.add_argument("--flip", dest="flip", action="store_true", help="flip images horizontally")
 parser.add_argument("--no_flip", dest="flip", action="store_false", help="don't flip images horizontally")
 parser.set_defaults(flip=True)
-parser.add_argument("--lr", type=float, default=0.0002, help="initial learning rate for adam")
+parser.add_argument("--lr", type=float, default=0.0001, help="initial learning rate for adam")
 parser.add_argument("--beta1", type=float, default=0.5, help="momentum term of adam")
-parser.add_argument("--l1_weight", type=float, default=500.0, help="weight on L1 term for generator gradient")
+parser.add_argument("--l1_weight", type=float, default=100.0, help="weight on L1 term for generator gradient")
 parser.add_argument("--gan_weight", type=float, default=1.0, help="weight on GAN term for generator gradient")
 
 # export options
@@ -56,7 +56,7 @@ a = parser.parse_args()
 EPS = 1e-12
 CROP_SIZE = 256
 
-Examples = collections.namedtuple("Examples", "paths, inputs, targets, weights, count, steps_per_epoch")
+Examples = collections.namedtuple("Examples", "paths, inputs, targets, count, steps_per_epoch")
 Model = collections.namedtuple("Model",
                                "outputs, predict_real, predict_fake, discrim_loss, discrim_grads_and_vars, gen_loss_GAN, gen_loss_L1, gen_grads_and_vars, train")
 
@@ -159,94 +159,6 @@ def check_image(image):
     return image
 
 
-# based on https://github.com/torch/image/blob/9f65c30167b2048ecbe8b7befdc6b2d6d12baee9/generic/image.c
-def rgb_to_lab(srgb):
-    with tf.name_scope("rgb_to_lab"):
-        srgb = check_image(srgb)
-        srgb_pixels = tf.reshape(srgb, [-1, 3])
-
-        with tf.name_scope("srgb_to_xyz"):
-            linear_mask = tf.cast(srgb_pixels <= 0.04045, dtype=tf.float32)
-            exponential_mask = tf.cast(srgb_pixels > 0.04045, dtype=tf.float32)
-            rgb_pixels = (srgb_pixels / 12.92 * linear_mask) + (
-                        ((srgb_pixels + 0.055) / 1.055) ** 2.4) * exponential_mask
-            rgb_to_xyz = tf.constant([
-                #    X        Y          Z
-                [0.412453, 0.212671, 0.019334],  # R
-                [0.357580, 0.715160, 0.119193],  # G
-                [0.180423, 0.072169, 0.950227],  # B
-            ])
-            xyz_pixels = tf.matmul(rgb_pixels, rgb_to_xyz)
-
-        # https://en.wikipedia.org/wiki/Lab_color_space#CIELAB-CIEXYZ_conversions
-        with tf.name_scope("xyz_to_cielab"):
-            # convert to fx = f(X/Xn), fy = f(Y/Yn), fz = f(Z/Zn)
-
-            # normalize for D65 white point
-            xyz_normalized_pixels = tf.multiply(xyz_pixels, [1 / 0.950456, 1.0, 1 / 1.088754])
-
-            epsilon = 6 / 29
-            linear_mask = tf.cast(xyz_normalized_pixels <= (epsilon ** 3), dtype=tf.float32)
-            exponential_mask = tf.cast(xyz_normalized_pixels > (epsilon ** 3), dtype=tf.float32)
-            fxfyfz_pixels = (xyz_normalized_pixels / (3 * epsilon ** 2) + 4 / 29) * linear_mask + (
-                        xyz_normalized_pixels ** (1 / 3)) * exponential_mask
-
-            # convert to lab
-            fxfyfz_to_lab = tf.constant([
-                #  l       a       b
-                [0.0, 500.0, 0.0],  # fx
-                [116.0, -500.0, 200.0],  # fy
-                [0.0, 0.0, -200.0],  # fz
-            ])
-            lab_pixels = tf.matmul(fxfyfz_pixels, fxfyfz_to_lab) + tf.constant([-16.0, 0.0, 0.0])
-
-        return tf.reshape(lab_pixels, tf.shape(srgb))
-
-
-def lab_to_rgb(lab):
-    with tf.name_scope("lab_to_rgb"):
-        lab = check_image(lab)
-        lab_pixels = tf.reshape(lab, [-1, 3])
-
-        # https://en.wikipedia.org/wiki/Lab_color_space#CIELAB-CIEXYZ_conversions
-        with tf.name_scope("cielab_to_xyz"):
-            # convert to fxfyfz
-            lab_to_fxfyfz = tf.constant([
-                #   fx      fy        fz
-                [1 / 116.0, 1 / 116.0, 1 / 116.0],  # l
-                [1 / 500.0, 0.0, 0.0],  # a
-                [0.0, 0.0, -1 / 200.0],  # b
-            ])
-            fxfyfz_pixels = tf.matmul(lab_pixels + tf.constant([16.0, 0.0, 0.0]), lab_to_fxfyfz)
-
-            # convert to xyz
-            epsilon = 6 / 29
-            linear_mask = tf.cast(fxfyfz_pixels <= epsilon, dtype=tf.float32)
-            exponential_mask = tf.cast(fxfyfz_pixels > epsilon, dtype=tf.float32)
-            xyz_pixels = (3 * epsilon ** 2 * (fxfyfz_pixels - 4 / 29)) * linear_mask + (
-                        fxfyfz_pixels ** 3) * exponential_mask
-
-            # denormalize for D65 white point
-            xyz_pixels = tf.multiply(xyz_pixels, [0.950456, 1.0, 1.088754])
-
-        with tf.name_scope("xyz_to_srgb"):
-            xyz_to_rgb = tf.constant([
-                #     r           g          b
-                [3.2404542, -0.9692660, 0.0556434],  # x
-                [-1.5371385, 1.8760108, -0.2040259],  # y
-                [-0.4985314, 0.0415560, 1.0572252],  # z
-            ])
-            rgb_pixels = tf.matmul(xyz_pixels, xyz_to_rgb)
-            # avoid a slightly negative number messing up the conversion
-            rgb_pixels = tf.clip_by_value(rgb_pixels, 0.0, 1.0)
-            linear_mask = tf.cast(rgb_pixels <= 0.0031308, dtype=tf.float32)
-            exponential_mask = tf.cast(rgb_pixels > 0.0031308, dtype=tf.float32)
-            srgb_pixels = (rgb_pixels * 12.92 * linear_mask) + (
-                        (rgb_pixels ** (1 / 2.4) * 1.055) - 0.055) * exponential_mask
-
-        return tf.reshape(srgb_pixels, tf.shape(lab))
-
-
 def load_examples():
 
     if a.input_dir is None or not os.path.exists(a.input_dir):
@@ -286,17 +198,10 @@ def load_examples():
 
         raw_input.set_shape([None, None, 3])
 
-        if a.lab_colorization:
-            # load color and brightness from image, no B image exists here
-            lab = rgb_to_lab(raw_input)
-            L_chan, a_chan, b_chan = preprocess_lab(lab)
-            a_images = tf.expand_dims(L_chan, axis=2)
-            b_images = tf.stack([a_chan, b_chan], axis=2)
-        else:
-            # break apart image pair and move to range [-1, 1]
-            width = tf.shape(raw_input)[1]  # [height, width, channels]
-            a_images = preprocess(raw_input[:, :width // 2, :])
-            b_images = preprocess(raw_input[:, width // 2:, :])
+        # break apart image pair and move to range [-1, 1]
+        width = tf.shape(raw_input)[1]  # [height, width, channels]
+        a_images = preprocess(raw_input[:, :width // 2, :])
+        b_images = preprocess(raw_input[:, width // 2:, :])
 
     if a.which_direction == "AtoB":
         inputs, targets = [a_images, b_images]
@@ -316,32 +221,13 @@ def load_examples():
         r = tf.image.resize_images(r, [a.scale_size, a.scale_size], method=tf.image.ResizeMethod.AREA)
         return r
 
-    def get_weights(input_images):
-        inp = deprocess(tf.round(input_images))
-        inp = tf.dtypes.cast(inp, tf.int32)
-        elem = [0, 1, 0]
-        const = tf.stack([elem] * a.scale_size)
-        const = tf.stack([const] * a.scale_size)
-        const = tf.dtypes.cast(const, tf.bool)
-        img_bool = tf.dtypes.cast(inp, tf.bool)
-        weight = tf.math.logical_not(tf.math.logical_xor(img_bool, const))
-        weight = tf.dtypes.cast(weight, tf.int32)
-        weight = tf.reduce_sum(weight, axis=2)
-        weight = tf.repeat(weight, repeats=3, axis=1)
-        weight = tf.reshape(weight, [a.scale_size, a.scale_size, 3])
-        weight = tf.dtypes.cast(weight, tf.float32)
-        return weight
-
     with tf.name_scope("input_images"):
         input_images = transform(inputs)
-
-    with tf.name_scope("weights"):
-        image_weights = get_weights(input_images)
 
     with tf.name_scope("target_images"):
         target_images = transform(targets)
 
-    paths_batch, inputs_batch, targets_batch, weights_batch = tf.train.batch([paths, input_images, target_images, image_weights],
+    paths_batch, inputs_batch, targets_batch = tf.train.batch([paths, input_images, target_images],
                                                               batch_size=a.batch_size)
 
     steps_per_epoch = int(math.ceil(len(input_paths) / a.batch_size))
@@ -350,7 +236,6 @@ def load_examples():
         paths=paths_batch,
         inputs=inputs_batch,
         targets=targets_batch,
-        weights=weights_batch,
         count=len(input_paths),
         steps_per_epoch=steps_per_epoch,
     )
@@ -366,7 +251,6 @@ def create_generator(generator_inputs, generator_outputs_channels):
         strides = [1, 1, 1, 1]
         output = tf.nn.conv2d(generator_inputs, filter, strides=strides, padding='VALID')
         output = lrelu(output, 0.2)
-        output = batchnorm(output)
         layers.append(output)
 
     # encoder_1: [batch, 256, 256, in_channels] => [batch, 128, 128, ngf]
@@ -428,12 +312,6 @@ def create_generator(generator_inputs, generator_outputs_channels):
         input = tf.concat([layers[-1], layers[1]], axis=3)
         rectified = tf.nn.relu(input)
         output = gen_deconv(rectified, generator_outputs_channels)
-        #output = tf.image.resize_images(output,[200,200])
-        #output_shape = [1,200,200,3]
-        #filter_shape = [7,7,3,128]
-        #filter = tf.get_variable('final_generator_filter', filter_shape, initializer=tf.random_normal_initializer(stddev=0.02))
-        #strides = [1, 2, 2, 1]
-        #output = tf.nn.conv2d_transpose(rectified, filter, output_shape=output_shape, strides=strides, padding='SAME')
         output = tf.tanh(output)
         layers.append(output)
 
@@ -445,7 +323,6 @@ ksize_cols = 296
 strides_rows = 236
 strides_cols = 236
 num_patches = int(a.scale_size/strides_rows)
-
 #num_patches = 3 #int(a.scale_size/200)
 ksizes = [1, ksize_rows, ksize_cols, 1]
 ksizes_output = [1, 256, 256, 1]
@@ -471,15 +348,15 @@ def extract_patches_inverse(x, y):
     return tf.gradients(_y, _x, grad_ys=y)[0] / grad
 
 
-def create_model(inputs, targets, weights):
+def create_model(inputs, targets):
 
     #Pad inputs to make shape to handle edge patches, so as we can give context as input to generator (context around target patch)
-    inputs_bounded = tf.image.pad_to_bounding_box(inputs, 20, 20, 768, 768)
+    inputs_bounded = tf.image.pad_to_bounding_box(inputs, 20, 20, a.scale_size+40, a.scale_size+40)
 
     out_channels = int(targets.get_shape()[-1])
 
-    def create_discriminator(discrim_inputs, discrim_targets):  # Join input and output image and feed to descriminator
-        n_layers = 3
+    def create_discriminator(discrim_inputs, discrim_targets):
+        n_layers = 5
         layers = []
 
         # 2x [batch, height, width, in_channels] => [batch, height, width, in_channels * 2]
@@ -508,7 +385,7 @@ def create_model(inputs, targets, weights):
             convolved = discrim_conv(rectified, out_channels=1, stride=1)
             output = tf.sigmoid(convolved)
             layers.append(output)
-
+        print(layers)
         return layers[-1]
 
     #Extract Patches
@@ -533,7 +410,7 @@ def create_model(inputs, targets, weights):
             output_patches = tf.reshape(output_patches, [1, num_patches, num_patches, patch_size_len])
 
             #Join all patches back
-            k = tf.constant(0.1, shape=[1, 728, 728, 3])
+            k = tf.constant(0.1, shape=[1, a.scale_size, a.scale_size, 3])
             outputs = extract_patches_inverse(k, output_patches)
 
     # create two copies of discriminator, one for real pairs and one for fake pairs
@@ -558,7 +435,7 @@ def create_model(inputs, targets, weights):
         # predict_fake => 1
         # abs(targets - outputs) => 0
         gen_loss_GAN = tf.reduce_mean(-tf.log(tf.clip_by_value((predict_fake + EPS),1e-12,1.0)))
-        gen_loss_L1 = tf.reduce_mean(tf.math.multiply(tf.abs(targets - outputs),weights)) #weighted loss
+        gen_loss_L1 = tf.reduce_mean(tf.abs(targets - outputs))
         gen_loss = gen_loss_GAN * a.gan_weight + gen_loss_L1 * a.l1_weight
 
     with tf.name_scope("discriminator_train"):
@@ -575,8 +452,7 @@ def create_model(inputs, targets, weights):
             gen_train = gen_optim.apply_gradients(gen_grads_and_vars)
 
     ema = tf.train.ExponentialMovingAverage(decay=0.99)
-    update_losses = ema.apply([discrim_loss, gen_loss_GAN, gen_loss_L1])
-
+    update_losses = ema.apply([discrim_loss, gen_loss_GAN, gen_loss_L1] + 8*[discrim_loss])
     global_step = tf.train.get_or_create_global_step()
     incr_global_step = tf.assign(global_step, global_step + 1)
 
@@ -599,7 +475,11 @@ def save_images(fetches, step=None):
         os.makedirs(image_dir)
 
     filesets = []
+    k=1
     for i, in_path in enumerate(fetches["paths"]):
+        k+=1
+        if(k>10):
+            break
         name, _ = os.path.splitext(os.path.basename(in_path.decode("utf8")))
         fileset = {"name": name, "step": step}
         for kind in ["inputs", "outputs", "targets"]:
@@ -733,7 +613,7 @@ def main():
     examples = load_examples()
 
     # inputs and targets are [batch_size, height, width, channels]
-    model = create_model(examples.inputs, examples.targets, examples.weights)
+    model = create_model(examples.inputs, examples.targets)
 
     # undo colorization splitting on images that we use for display/output
     if a.lab_colorization:
@@ -825,10 +705,9 @@ def main():
     with sv.managed_session() as sess:
         print("parameter_count =", sess.run(parameter_count))
 
-        # exit(0)
-
         if a.checkpoint is not None:
             print("loading model from checkpoint")
+            print(a.checkpoint)
             checkpoint = tf.train.latest_checkpoint(a.checkpoint)
             saver.restore(sess, checkpoint)
 
