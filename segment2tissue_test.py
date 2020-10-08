@@ -61,7 +61,7 @@ CROP_SIZE = 0
 
 Examples = collections.namedtuple("Examples", "paths, inputs, targets, count, steps_per_epoch")
 Model = collections.namedtuple("Model",
-                               "outputs, outputs_test, predict_real, predict_fake, discrim_loss, discrim_grads_and_vars, gen_loss_GAN, gen_loss_L1, gen_grads_and_vars, train")
+                               "outputs, outputs_test, train")
 
 
 def preprocess(image):
@@ -74,30 +74,6 @@ def deprocess(image):
     with tf.name_scope("deprocess"):
         # [-1, 1] => [0, 1]
         return (image + 1) / 2
-
-
-def preprocess_lab(lab):
-    with tf.name_scope("preprocess_lab"):
-        L_chan, a_chan, b_chan = tf.unstack(lab, axis=2)
-        # L_chan: black and white with input range [0, 100]
-        # a_chan/b_chan: color channels with input range ~[-110, 110], not exact
-        # [0, 100] => [-1, 1],  ~[-110, 110] => [-1, 1]
-        return [L_chan / 50 - 1, a_chan / 110, b_chan / 110]
-
-
-def deprocess_lab(L_chan, a_chan, b_chan):
-    with tf.name_scope("deprocess_lab"):
-        # this is axis=3 instead of axis=2 because we process individual images but deprocess batches
-        return tf.stack([(L_chan + 1) / 2 * 100, a_chan * 110, b_chan * 110], axis=3)
-
-
-def augment(image, brightness):
-    # (a, b) color channels, combine with L channel and convert to rgb
-    a_chan, b_chan = tf.unstack(image, axis=3)
-    L_chan = tf.squeeze(brightness, axis=3)
-    lab = deprocess_lab(L_chan, a_chan, b_chan)
-    rgb = lab_to_rgb(lab)
-    return rgb
 
 
 def discrim_conv(batch_input, out_channels, stride):
@@ -164,94 +140,6 @@ def check_image(image):
     return image
 
 
-# based on https://github.com/torch/image/blob/9f65c30167b2048ecbe8b7befdc6b2d6d12baee9/generic/image.c
-def rgb_to_lab(srgb):
-    with tf.name_scope("rgb_to_lab"):
-        srgb = check_image(srgb)
-        srgb_pixels = tf.reshape(srgb, [-1, 3])
-
-        with tf.name_scope("srgb_to_xyz"):
-            linear_mask = tf.cast(srgb_pixels <= 0.04045, dtype=tf.float32)
-            exponential_mask = tf.cast(srgb_pixels > 0.04045, dtype=tf.float32)
-            rgb_pixels = (srgb_pixels / 12.92 * linear_mask) + (
-                        ((srgb_pixels + 0.055) / 1.055) ** 2.4) * exponential_mask
-            rgb_to_xyz = tf.constant([
-                #    X        Y          Z
-                [0.412453, 0.212671, 0.019334],  # R
-                [0.357580, 0.715160, 0.119193],  # G
-                [0.180423, 0.072169, 0.950227],  # B
-            ])
-            xyz_pixels = tf.matmul(rgb_pixels, rgb_to_xyz)
-
-        # https://en.wikipedia.org/wiki/Lab_color_space#CIELAB-CIEXYZ_conversions
-        with tf.name_scope("xyz_to_cielab"):
-            # convert to fx = f(X/Xn), fy = f(Y/Yn), fz = f(Z/Zn)
-
-            # normalize for D65 white point
-            xyz_normalized_pixels = tf.multiply(xyz_pixels, [1 / 0.950456, 1.0, 1 / 1.088754])
-
-            epsilon = 6 / 29
-            linear_mask = tf.cast(xyz_normalized_pixels <= (epsilon ** 3), dtype=tf.float32)
-            exponential_mask = tf.cast(xyz_normalized_pixels > (epsilon ** 3), dtype=tf.float32)
-            fxfyfz_pixels = (xyz_normalized_pixels / (3 * epsilon ** 2) + 4 / 29) * linear_mask + (
-                        xyz_normalized_pixels ** (1 / 3)) * exponential_mask
-
-            # convert to lab
-            fxfyfz_to_lab = tf.constant([
-                #  l       a       b
-                [0.0, 500.0, 0.0],  # fx
-                [116.0, -500.0, 200.0],  # fy
-                [0.0, 0.0, -200.0],  # fz
-            ])
-            lab_pixels = tf.matmul(fxfyfz_pixels, fxfyfz_to_lab) + tf.constant([-16.0, 0.0, 0.0])
-
-        return tf.reshape(lab_pixels, tf.shape(srgb))
-
-
-def lab_to_rgb(lab):
-    with tf.name_scope("lab_to_rgb"):
-        lab = check_image(lab)
-        lab_pixels = tf.reshape(lab, [-1, 3])
-
-        # https://en.wikipedia.org/wiki/Lab_color_space#CIELAB-CIEXYZ_conversions
-        with tf.name_scope("cielab_to_xyz"):
-            # convert to fxfyfz
-            lab_to_fxfyfz = tf.constant([
-                #   fx      fy        fz
-                [1 / 116.0, 1 / 116.0, 1 / 116.0],  # l
-                [1 / 500.0, 0.0, 0.0],  # a
-                [0.0, 0.0, -1 / 200.0],  # b
-            ])
-            fxfyfz_pixels = tf.matmul(lab_pixels + tf.constant([16.0, 0.0, 0.0]), lab_to_fxfyfz)
-
-            # convert to xyz
-            epsilon = 6 / 29
-            linear_mask = tf.cast(fxfyfz_pixels <= epsilon, dtype=tf.float32)
-            exponential_mask = tf.cast(fxfyfz_pixels > epsilon, dtype=tf.float32)
-            xyz_pixels = (3 * epsilon ** 2 * (fxfyfz_pixels - 4 / 29)) * linear_mask + (
-                        fxfyfz_pixels ** 3) * exponential_mask
-
-            # denormalize for D65 white point
-            xyz_pixels = tf.multiply(xyz_pixels, [0.950456, 1.0, 1.088754])
-
-        with tf.name_scope("xyz_to_srgb"):
-            xyz_to_rgb = tf.constant([
-                #     r           g          b
-                [3.2404542, -0.9692660, 0.0556434],  # x
-                [-1.5371385, 1.8760108, -0.2040259],  # y
-                [-0.4985314, 0.0415560, 1.0572252],  # z
-            ])
-            rgb_pixels = tf.matmul(xyz_pixels, xyz_to_rgb)
-            # avoid a slightly negative number messing up the conversion
-            rgb_pixels = tf.clip_by_value(rgb_pixels, 0.0, 1.0)
-            linear_mask = tf.cast(rgb_pixels <= 0.0031308, dtype=tf.float32)
-            exponential_mask = tf.cast(rgb_pixels > 0.0031308, dtype=tf.float32)
-            srgb_pixels = (rgb_pixels * 12.92 * linear_mask) + (
-                        (rgb_pixels ** (1 / 2.4) * 1.055) - 0.055) * exponential_mask
-
-        return tf.reshape(srgb_pixels, tf.shape(lab))
-
-
 def load_examples():
 
     if a.input_dir is None or not os.path.exists(a.input_dir):
@@ -291,17 +179,10 @@ def load_examples():
 
         raw_input.set_shape([None, None, 3])
 
-        if a.lab_colorization:
-            # load color and brightness from image, no B image exists here
-            lab = rgb_to_lab(raw_input)
-            L_chan, a_chan, b_chan = preprocess_lab(lab)
-            a_images = tf.expand_dims(L_chan, axis=2)
-            b_images = tf.stack([a_chan, b_chan], axis=2)
-        else:
-            # break apart image pair and move to range [-1, 1]
-            width = tf.shape(raw_input)[1]  # [height, width, channels]
-            a_images = preprocess(raw_input[:, :width // 2, :])
-            b_images = preprocess(raw_input[:, width // 2:, :])
+        # break apart image pair and move to range [-1, 1]
+        width = tf.shape(raw_input)[1]  # [height, width, channels]
+        a_images = preprocess(raw_input[:, :width // 2, :])
+        b_images = preprocess(raw_input[:, width // 2:, :])
 
     if a.which_direction == "AtoB":
         inputs, targets = [a_images, b_images]
@@ -312,13 +193,10 @@ def load_examples():
 
     # synchronize seed for image operations so that we do the same operations to both
     # input and output images
-    seed = random.randint(0, 2 ** 31 - 1)
-
     def transform(image):
         r = image
-        if a.flip:
-            r = tf.image.random_flip_left_right(r, seed=seed)
-        r = tf.image.resize_images(r, [a.scale_size, a.scale_size], method=tf.image.ResizeMethod.AREA)
+        r.set_shape([a.scale_size,a.scale_size,3])
+        #r = tf.image.resize_images(r, [a.scale_size, a.scale_size], method=tf.image.ResizeMethod.AREA)
         return r
 
     with tf.name_scope("input_images"):
@@ -344,14 +222,13 @@ def load_examples():
 def create_generator(generator_inputs, generator_outputs_channels):
     layers = []
 
-    # Add Filter to detect edges
-    filter_shape = [41, 41, 3, a.ngf]
+    #Add Filter to detect edges
+    filter_shape = [41,41,3,a.ngf]
     with tf.variable_scope("encoder_1"):
         filter = tf.get_variable('edge_detector', filter_shape, initializer=tf.random_normal_initializer(stddev=0.02))
         strides = [1, 1, 1, 1]
         output = tf.nn.conv2d(generator_inputs, filter, strides=strides, padding='VALID')
         output = lrelu(output, 0.2)
-        output = batchnorm(output)
         layers.append(output)
 
     # encoder_1: [batch, 256, 256, in_channels] => [batch, 128, 128, ngf]
@@ -397,6 +274,7 @@ def create_generator(generator_inputs, generator_outputs_channels):
                 input = layers[-1]
             else:
                 input = tf.concat([layers[-1], layers[skip_layer]], axis=3)
+                #input = layers[-1]
 
             rectified = tf.nn.relu(input)
             # [batch, in_height, in_width, in_channels] => [batch, in_height*2, in_width*2, out_channels]
@@ -413,7 +291,6 @@ def create_generator(generator_inputs, generator_outputs_channels):
         input = tf.concat([layers[-1], layers[1]], axis=3)
         rectified = tf.nn.relu(input)
         output = gen_deconv(rectified, generator_outputs_channels)
-        #output = tf.image.resize_images(output, [200, 200])
         output = tf.tanh(output)
         layers.append(output)
 
@@ -424,55 +301,11 @@ def create_model(inputs, targets):
 
     out_channels = int(targets.get_shape()[-1])
 
-    def create_discriminator(discrim_inputs, discrim_targets):  # Join input and output image and feed to descriminator
-        n_layers = 3
-        layers = []
-
-        # 2x [batch, height, width, in_channels] => [batch, height, width, in_channels * 2]
-        input = tf.concat([discrim_inputs, discrim_targets], axis=3)
-
-        # layer_1: [batch, 256, 256, in_channels * 2] => [batch, 128, 128, ndf]
-        with tf.variable_scope("layer_1"):
-            convolved = discrim_conv(input, a.ndf, stride=2)
-            rectified = lrelu(convolved, 0.2)
-            layers.append(rectified)
-
-        # layer_2: [batch, 128, 128, ndf] => [batch, 64, 64, ndf * 2]
-        # layer_3: [batch, 64, 64, ndf * 2] => [batch, 32, 32, ndf * 4]
-        # layer_4: [batch, 32, 32, ndf * 4] => [batch, 31, 31, ndf * 8]
-        for i in range(n_layers):
-            with tf.variable_scope("layer_%d" % (len(layers) + 1)):
-                out_channels = a.ndf * min(2 ** (i + 1), 8)
-                stride = 1 if i == n_layers - 1 else 2  # last layer here has stride 1
-                convolved = discrim_conv(layers[-1], out_channels, stride=stride)
-                normalized = batchnorm(convolved)
-                rectified = lrelu(normalized, 0.2)
-                layers.append(rectified)
-
-        # layer_5: [batch, 31, 31, ndf * 8] => [batch, 30, 30, 1]
-        with tf.variable_scope("layer_%d" % (len(layers) + 1)):
-            convolved = discrim_conv(rectified, out_channels=1, stride=1)
-            output = tf.sigmoid(convolved)
-            layers.append(output)
-
-        return layers[-1]
-
     with tf.name_scope("patches_generator"):
         with tf.variable_scope("generator", reuse=tf.AUTO_REUSE):
             outputs_test = create_generator(inputs, out_channels)
 
-    with tf.name_scope("real_discriminator"):
-        with tf.variable_scope("discriminator"):
-            predict_real = create_discriminator(inputs, targets)
-
     return Model(
-        predict_real=predict_real,
-        predict_fake=None,
-        discrim_loss=None,
-        discrim_grads_and_vars=None,
-        gen_loss_GAN=None,
-        gen_loss_L1=None,
-        gen_grads_and_vars=None,
         outputs=None,
         outputs_test=outputs_test,
         train=None,
@@ -558,101 +391,20 @@ def main():
     with open(os.path.join(a.output_dir, "options.json"), "w") as f:
         f.write(json.dumps(vars(a), sort_keys=True, indent=4))
 
-    if a.mode == "export":
-        # export the generator to a meta graph that can be imported later for standalone generation
-        if a.lab_colorization:
-            raise Exception("export not supported for lab_colorization")
-
-        input = tf.placeholder(tf.string, shape=[1])
-        input_data = tf.decode_base64(input[0])
-        input_image = tf.image.decode_png(input_data)
-
-        # remove alpha channel if present
-        input_image = tf.cond(tf.equal(tf.shape(input_image)[2], 4), lambda: input_image[:, :, :3], lambda: input_image)
-        # convert grayscale to RGB
-        input_image = tf.cond(tf.equal(tf.shape(input_image)[2], 1), lambda: tf.image.grayscale_to_rgb(input_image),
-                              lambda: input_image)
-
-        input_image = tf.image.convert_image_dtype(input_image, dtype=tf.float32)
-        input_image.set_shape([CROP_SIZE, CROP_SIZE, 3])
-        batch_input = tf.expand_dims(input_image, axis=0)
-
-        with tf.variable_scope("generator"):
-            batch_output = deprocess(create_generator(preprocess(batch_input), 3))
-
-        output_image = tf.image.convert_image_dtype(batch_output, dtype=tf.uint8)[0]
-        if a.output_filetype == "png":
-            output_data = tf.image.encode_png(output_image)
-        elif a.output_filetype == "jpeg":
-            output_data = tf.image.encode_jpeg(output_image, quality=80)
-        else:
-            raise Exception("invalid filetype")
-        output = tf.convert_to_tensor([tf.encode_base64(output_data)])
-
-        key = tf.placeholder(tf.string, shape=[1])
-        inputs = {
-            "key": key.name,
-            "input": input.name
-        }
-        tf.add_to_collection("inputs", json.dumps(inputs))
-        outputs = {
-            "key": tf.identity(key).name,
-            "output": output.name,
-        }
-        tf.add_to_collection("outputs", json.dumps(outputs))
-
-        init_op = tf.global_variables_initializer()
-        restore_saver = tf.train.Saver()
-        export_saver = tf.train.Saver()
-
-        with tf.Session() as sess:
-            sess.run(init_op)
-            print("loading model from checkpoint")
-            checkpoint = tf.train.latest_checkpoint(a.checkpoint)
-            restore_saver.restore(sess, checkpoint)
-            print("exporting model")
-            export_saver.export_meta_graph(filename=os.path.join(a.output_dir, "export.meta"))
-            export_saver.save(sess, os.path.join(a.output_dir, "export"), write_meta_graph=False)
-
-        return
-
     examples = load_examples()
 
     # inputs and targets are [batch_size, height, width, channels]
     model = create_model(examples.inputs, examples.targets)
 
-    # undo colorization splitting on images that we use for display/output
-    if a.lab_colorization:
-        if a.which_direction == "AtoB":
-            # inputs is brightness, this will be handled fine as a grayscale image
-            # need to augment targets and outputs with brightness
-            targets = augment(examples.targets, examples.inputs)
-            outputs = augment(model.outputs, examples.inputs)
-            # inputs can be deprocessed normally and handled as if they are single channel
-            # grayscale images
-            inputs = deprocess(examples.inputs)
-        elif a.which_direction == "BtoA":
-            # inputs will be color channels only, get brightness from targets
-            inputs = augment(examples.inputs, examples.targets)
-            targets = deprocess(examples.targets)
-            outputs = deprocess(model.outputs)
-        else:
-            raise Exception("invalid direction")
+    inputs = deprocess(examples.inputs)
+    targets = deprocess(examples.targets)
+    if(a.mode == "train"):
+        outputs = deprocess(model.outputs)
     else:
-        inputs = deprocess(examples.inputs)
-        targets = deprocess(examples.targets)
-        if(a.mode == "train"):
-            outputs = deprocess(model.outputs)
-        else:
-            outputs = deprocess(model.outputs_test)
+        outputs = deprocess(model.outputs_test)
 
 
     def convert(image):
-        if a.aspect_ratio != 1.0:
-            # upscale to correct aspect ratio
-            size = [CROP_SIZE, int(round(CROP_SIZE * a.aspect_ratio))]
-            image = tf.image.resize_images(image, size=size, method=tf.image.ResizeMethod.BICUBIC)
-
         return tf.image.convert_image_dtype(image, dtype=tf.uint8, saturate=True)
 
     # reverse any processing on images so they can be written to disk or displayed to user
@@ -682,8 +434,6 @@ def main():
     sv = tf.train.Supervisor(logdir=logdir, save_summaries_secs=0, saver=None)
     with sv.managed_session() as sess:
         print("parameter_count =", sess.run(parameter_count))
-
-        # exit(0)
 
         if a.checkpoint is not None:
             print("loading model from checkpoint")

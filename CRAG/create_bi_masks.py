@@ -5,18 +5,14 @@ import matplotlib.pyplot as plt
 import matplotlib
 import glob
 
-folder_path = "F:/Datasets/CRAG_LabServer/Train/Grades/1"
+folder_path = "F:/Datasets/CRAG_LabServer/Test/Grades/1/1436_cropped/SyntheticCohort/results/images"
 masks_input_folder = os.path.join(folder_path, "color_masks")
 images_input_folder = os.path.join(folder_path, "images")
-outdir = "F:/Datasets/CRAG_LabServer/Train/Grades/1/Two_Parallel_AFROS/"
+outdir = "F:/Datasets/CRAG_LabServer/Test/Grades/1/Two_Parallel_AFROS/glands"
 IsGlandMask = True #Make true if you want gland vs everything as background and False if stroma vs everything as background
 
-if(IsGlandMask):
-    outdir_masks = outdir + "bi_gland_masks"
-    outdir_images = outdir + "bi_gland_images"
-else:
-    outdir_masks = outdir + "bi_stromal_masks"
-    outdir_images = outdir + "bi_stromal_images"
+outdir_masks = outdir + "/masks"
+outdir_images = outdir + "/images"
 
 if not os.path.exists(outdir_masks):
         os.makedirs(outdir_masks)

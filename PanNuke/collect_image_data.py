@@ -5,7 +5,6 @@ import imageio
 import os
 
 imagepath = "F:/Datasets/PanNuke/Fold2/images_npy/fold2/images.npy"
-typespath = "F:/Datasets/PanNuke/Fold2/images_npy/fold2/types.npy"
 outfolder = "F:/Datasets/PanNuke/Fold2/images/"
 
 if not os.path.exists(outfolder):

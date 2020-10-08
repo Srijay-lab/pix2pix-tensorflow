@@ -5,17 +5,17 @@ from PIL import Image
 import matplotlib.pyplot as plt
 import matplotlib
 
-folder = "F:/Datasets/CRAG_LabServer/Test/Grades/1/1436_cropped/check_single_big_image/results/images"
-outpath = "F:/Datasets/CRAG_LabServer/Test/Grades/1/1436_cropped/check_single_big_image/joint/2"
-outfile = os.path.join(outpath,"generated_tile_4.png")
+folder = "F:/Datasets/CRAG_LabServer/c1/Test/Grades/1/728_cropped/single/results_9d1g/images"
+outpath = "F:/Datasets/CRAG_LabServer/c1/Test/Grades/1/728_cropped/single/"
+outfile = os.path.join(outpath,"tissue_mask_synthetic-tmi-single-2.png")
 
 if not os.path.exists(outpath):
         os.makedirs(outpath)
 
 paths = glob.glob(os.path.join(folder,"*.png"))
 
-hight = 1436
-width = 1436
+hight = 728
+width = 728
 patch = 256
 
 image = np.zeros((hight,width,3))
@@ -34,13 +34,14 @@ for path in paths:
         k+=1
 
 count_masks = count_masks.clip(min=1)
-
+#count_masks[count_masks>1]=1000
+#image[image>255]=0
 image = image/count_masks
 #print(image)
 #exit(0)
 image = image/255.0
 print(image.shape)
-plt.imshow(image)
-plt.show()
-
+#plt.imshow(image)
+#plt.show()
+print("Done")
 matplotlib.image.imsave(outfile, image)

@@ -5,10 +5,10 @@ import matplotlib.pyplot as plt
 import matplotlib
 import glob
 
-folder_path = "F:/Datasets/CRAG_LabServer/Test/Grades/3"
-masks_input_folder = os.path.join(folder_path, "masks")
+folder_path = "F:/Datasets/CRAG_LabServer/c2/synthetic_data_provider"
+masks_input_folder = os.path.join(folder_path, "binary_masks")
 images_input_folder = os.path.join(folder_path, "images")
-outdir = "F:/Datasets/CRAG_LabServer/Test/Grades/3/color_masks"
+outdir = "F:/Datasets/CRAG_LabServer/c2/synthetic_data_provider/masks"
 
 if not os.path.exists(outdir):
         os.makedirs(outdir)
@@ -33,7 +33,7 @@ def GenerateTriMask(imgname):
                 new_mk[i][j] = [0,0,255]
             else: #tissue
                 new_mk[i][j] = [255,0,0]
-    #new_mk = new_mk / 255.0
+    new_mk = new_mk / 255.0
     outpath = os.path.join(outdir,imgname)
     matplotlib.image.imsave(outpath, new_mk)
 

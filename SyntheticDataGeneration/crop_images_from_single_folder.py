@@ -4,36 +4,20 @@ from PIL import Image
 import matplotlib.pyplot as plt
 import numpy as np
 
-path = "F:/Datasets/CRAG_LabServer/c1/Test/Grades/1/728_cropped/single/mask.png"
-output_dir = "F:/Datasets/CRAG_LabServer/c1/Test/Grades/1/728_cropped/single/masks"
+input_dir = "F:/Datasets/DigestPath/safron/test/3/1436_1200/results_tmi3/images"
+output_dir = "C:/Users/Srijay/Desktop/Projects/Segmentation/unet/data/crag/TMI_EXP_2/setup3/train/crag_train/real/crag_real_data_provider"
 
-patchsize = 296
-stride = 236
-if_pad = 1
-new_size = (768,768)
+patchsize = 964
+stride = 600
 
 if not os.path.exists(output_dir):
         os.makedirs(output_dir)
 
 def CropImage(image_path):
+
     image_name = os.path.split(image_path)[1].split('.')[0]
     im = Image.open(image_path)
-    size = im.size
-
-    #if(if_pad == 0):
-        #im = im.resize(new_size)
-
-    if(if_pad):
-        new_im = Image.new("RGB", new_size)  ## luckily, this is already black!
-        new_im.paste(im, ((new_size[0] - size[0]) // 2,
-                              (new_size[1] - size[1]) // 2))
-        plt.imshow(new_im)
-        plt.show()
-        print("done")
-    else:
-        new_im = im
-
-    width, height = new_im.size
+    width, height = im.size
 
     x = 0
     y = 0
@@ -41,7 +25,6 @@ def CropImage(image_path):
     bottom = 0
 
     while (bottom < height):
-        print("Hello")
         while (right < width):
             left = x
             top = y
@@ -55,7 +38,7 @@ def CropImage(image_path):
                 offset = bottom - height
                 bottom -= offset
                 top -= offset
-            im_crop = new_im.crop((left, top, right, bottom))
+            im_crop = im.crop((left, top, right, bottom))
             im_crop_name = image_name + "_" + str(left) + "_" + str(top) + ".png"
             output_path = os.path.join(output_dir, im_crop_name)
             im_crop.save(output_path)
@@ -64,6 +47,6 @@ def CropImage(image_path):
         right = 0
         y += stride
 
-#for path in image_paths:
-
-CropImage(path)
+image_paths = glob.glob(os.path.join(input_dir,"*.png"))
+for path in image_paths:
+    CropImage(path)

@@ -1,23 +1,33 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib
-import imageio
+from tensorflow.keras.preprocessing import image
 import os
+import glob
+import PIL
 
-imagepath = "F:/Datasets/PanNuke/Fold2/images_npy/fold2/images.npy"
-typespath = "F:/Datasets/PanNuke/Fold2/images_npy/fold2/types.npy"
-outfolder = "F:/Datasets/PanNuke/Fold2/images/"
+#PIL.Image.MAX_IMAGE_PIXELS = 933120000
+images = "F:/Datasets/DigestPath/mask_npy"
+outfolder = "F:/Datasets/DigestPath/masks"
+
+paths = glob.glob(os.path.join(images,"*.npy"))
 
 if not os.path.exists(outfolder):
         os.makedirs(outfolder)
+ws = []
+hs = []
 
-images = np.load(imagepath)
-types = np.load(typespath)
-l = len(types)
+def extract_image(path):
+    imname = os.path.split(path)[1]
+    imname = imname.split(".")[0]+".png"
+    image = np.load(path)
+    print(image.shape)
+    w,h = image.shape
+    matplotlib.image.imsave(os.path.join(outfolder,imname), image)
+    ws.append(w)
+    hs.append(h)
 
-for i in range(0,l):
-    type = types[i]
-    imagename = type + "_" + str(i) + ".png"
-    imagepath = os.path.join(outfolder,imagename)
-    img = images[i]/255.0
-    matplotlib.image.imsave(imagepath, img)
+for path in paths:
+    if("neg" in path):
+        print(path)
+        extract_image(path)

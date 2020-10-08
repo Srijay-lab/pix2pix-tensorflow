@@ -3,13 +3,13 @@ import os
 
 tiatoolbox_loc = "C:/Users/Srijay/Desktop/Projects/tiatoolbox_private/"
 
-input_image_dir = 'F:/Datasets/CRAG_LabServer/Train/Grades/1/1024_cropped/images'
+input_image_dir = 'F:/Datasets/DigestPath/safron/test/images'
 
-target_image = 'F:/Datasets/CRAG_LabServer/Train/Grades/1/1024_cropped/stain.png'
+target_image = 'F:/Datasets/DigestPath/safron/train/stain.jpg'
 
-output_dir = 'F:/Datasets/CRAG_LabServer/Train/Grades/1/1024_cropped/stain_images'
+output_dir = 'F:/Datasets/DigestPath/safron/test/stain_images'
 
-image_paths = glob.glob(input_image_dir + "/*.png")
+image_paths = glob.glob(input_image_dir + "/*.jpg")
 
 if not os.path.exists(output_dir):
     os.makedirs(output_dir)

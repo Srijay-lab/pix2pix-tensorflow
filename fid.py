@@ -14,6 +14,7 @@ from tensorflow.keras.applications.inception_v3 import preprocess_input
 from tensorflow.keras.datasets.mnist import load_data
 from skimage.transform import resize
 from PIL import Image
+import random
 
 # scale an array of images to a new size
 def scale_images(images, new_shape):
@@ -46,12 +47,12 @@ def calculate_fid(model, images1, images2):
     fid = ssdiff + trace(sigma1 + sigma2 - 2.0 * covmean)
     return fid
 
-folder = "F:/Datasets/CRAG_LabServer/Test/Grades/1/728_cropped/results/results_run4/images"
+folder = "F:/Datasets/DigestPath/safron/test/3/1436_1200/results_tmi3/images"
 
 paths = glob.glob(os.path.join(folder,"*.png"))
+#paths = random.sample(paths,1000)
 
-size = 728
-num_images = 80
+size = 1436
 scale_299 = 0
 
 target_images = []
@@ -60,6 +61,8 @@ output_images = []
 for path in paths:
     img = Image.open(path)
     img = numpy.asarray(img)
+    #if(numpy.mean(img)>230):
+        #continue
     if('outputs' in path):
         output_images.append(img)
     elif('targets' in path):
@@ -67,6 +70,9 @@ for path in paths:
 
 target_images = numpy.array(target_images)
 output_images = numpy.array(output_images)
+num_images = len(output_images)
+print(num_images)
+print(len(target_images))
 
 # resize images
 if(scale_299):
