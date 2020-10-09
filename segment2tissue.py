@@ -35,7 +35,6 @@ parser.add_argument("--display_freq", type=int, default=1000, help="write curren
 parser.add_argument("--save_freq", type=int, default=1000, help="save model every save_freq steps, 0 to disable")
 parser.add_argument("--separable_conv", action="store_true", help="use separable convolutions in the generator")
 parser.add_argument("--aspect_ratio", type=float, default=1.0, help="aspect ratio of output images (width/height)")
-parser.add_argument("--lab_colorization", action="store_true", help="split input image into brightness (A) and color (B)")
 parser.add_argument("--batch_size", type=int, default=1, help="number of images in batch")
 parser.add_argument("--which_direction", type=str, default="BtoA", choices=["AtoB", "BtoA"])
 parser.add_argument("--ngf", type=int, default=64, help="number of generator filters in first conv layer")
@@ -69,30 +68,6 @@ def deprocess(image):
     with tf.name_scope("deprocess"):
         # [-1, 1] => [0, 1]
         return (image + 1) / 2
-
-
-def preprocess_lab(lab):
-    with tf.name_scope("preprocess_lab"):
-        L_chan, a_chan, b_chan = tf.unstack(lab, axis=2)
-        # L_chan: black and white with input range [0, 100]
-        # a_chan/b_chan: color channels with input range ~[-110, 110], not exact
-        # [0, 100] => [-1, 1],  ~[-110, 110] => [-1, 1]
-        return [L_chan / 50 - 1, a_chan / 110, b_chan / 110]
-
-
-def deprocess_lab(L_chan, a_chan, b_chan):
-    with tf.name_scope("deprocess_lab"):
-        # this is axis=3 instead of axis=2 because we process individual images but deprocess batches
-        return tf.stack([(L_chan + 1) / 2 * 100, a_chan * 110, b_chan * 110], axis=3)
-
-
-def augment(image, brightness):
-    # (a, b) color channels, combine with L channel and convert to rgb
-    a_chan, b_chan = tf.unstack(image, axis=3)
-    L_chan = tf.squeeze(brightness, axis=3)
-    lab = deprocess_lab(L_chan, a_chan, b_chan)
-    rgb = lab_to_rgb(lab)
-    return rgb
 
 
 def discrim_conv(batch_input, out_channels, stride):
@@ -347,122 +322,143 @@ def extract_patches_inverse(x, y):
 
 def create_model(inputs, targets):
 
-    #Pad inputs to make shape to handle edge patches, so as we can give context as input to generator (context around target patch)
-    inputs_bounded = tf.image.pad_to_bounding_box(inputs, 20, 20, a.scale_size+40, a.scale_size+40)
-
     out_channels = int(targets.get_shape()[-1])
 
-    def create_discriminator(discrim_inputs, discrim_targets):
-        n_layers = 5
-        layers = []
+    if(a.mode == "train" or a.scale_size != 296):
 
-        # 2x [batch, height, width, in_channels] => [batch, height, width, in_channels * 2]
-        input = tf.concat([discrim_inputs, discrim_targets], axis=3)
+        def create_discriminator(discrim_inputs, discrim_targets):
+            n_layers = 5
+            layers = []
 
-        # layer_1: [batch, 256, 256, in_channels * 2] => [batch, 128, 128, ndf]
-        with tf.variable_scope("layer_1"):
-            convolved = discrim_conv(input, a.ndf, stride=2)
-            rectified = lrelu(convolved, 0.2)
-            layers.append(rectified)
+            # 2x [batch, height, width, in_channels] => [batch, height, width, in_channels * 2]
+            input = tf.concat([discrim_inputs, discrim_targets], axis=3)
 
-        # layer_2: [batch, 128, 128, ndf] => [batch, 64, 64, ndf * 2]
-        # layer_3: [batch, 64, 64, ndf * 2] => [batch, 32, 32, ndf * 4]
-        # layer_4: [batch, 32, 32, ndf * 4] => [batch, 31, 31, ndf * 8]
-        for i in range(n_layers):
-            with tf.variable_scope("layer_%d" % (len(layers) + 1)):
-                out_channels = a.ndf * min(2 ** (i + 1), 8)
-                stride = 1 if i == n_layers - 1 else 2  # last layer here has stride 1
-                convolved = discrim_conv(layers[-1], out_channels, stride=stride)
-                normalized = batchnorm(convolved)
-                rectified = lrelu(normalized, 0.2)
+            # layer_1: [batch, 256, 256, in_channels * 2] => [batch, 128, 128, ndf]
+            with tf.variable_scope("layer_1"):
+                convolved = discrim_conv(input, a.ndf, stride=2)
+                rectified = lrelu(convolved, 0.2)
                 layers.append(rectified)
 
-        # layer_5: [batch, 31, 31, ndf * 8] => [batch, 30, 30, 1]
-        with tf.variable_scope("layer_%d" % (len(layers) + 1)):
-            convolved = discrim_conv(rectified, out_channels=1, stride=1)
-            output = tf.sigmoid(convolved)
-            layers.append(output)
-        print(layers)
-        return layers[-1]
+            # layer_2: [batch, 128, 128, ndf] => [batch, 64, 64, ndf * 2]
+            # layer_3: [batch, 64, 64, ndf * 2] => [batch, 32, 32, ndf * 4]
+            # layer_4: [batch, 32, 32, ndf * 4] => [batch, 31, 31, ndf * 8]
+            for i in range(n_layers):
+                with tf.variable_scope("layer_%d" % (len(layers) + 1)):
+                    out_channels = a.ndf * min(2 ** (i + 1), 8)
+                    stride = 1 if i == n_layers - 1 else 2  # last layer here has stride 1
+                    convolved = discrim_conv(layers[-1], out_channels, stride=stride)
+                    normalized = batchnorm(convolved)
+                    rectified = lrelu(normalized, 0.2)
+                    layers.append(rectified)
 
-    #Extract Patches
-    with tf.variable_scope("extract_patches"):
-        inputs_patches = extract_patches(inputs_bounded, ksizes, strides, rates)
+            # layer_5: [batch, 31, 31, ndf * 8] => [batch, 30, 30, 1]
+            with tf.variable_scope("layer_%d" % (len(layers) + 1)):
+                convolved = discrim_conv(rectified, out_channels=1, stride=1)
+                output = tf.sigmoid(convolved)
+                layers.append(output)
+            print(layers)
+            return layers[-1]
 
-    with tf.name_scope("patches_generator"):
-        with tf.variable_scope("generator", reuse=tf.AUTO_REUSE):
-            output_patches = []
-            patch_size_len = 256*256*3
-            #Get output from each patch via same generator
-            for i in range(0, num_patches):
-                for j in range(0, num_patches):
-                    patch = inputs_patches[0, i, j,]
-                    #patch_size_len = int(patch.get_shape()[0]) #defined above
-                    # reshape
-                    patch = tf.reshape(patch, [ksize_rows, ksize_cols, 3])
-                    patch = tf.expand_dims(patch,0)
-                    patch_output = create_generator(patch, out_channels)
-                    output_patches.append(tf.reshape(patch_output,[patch_size_len]))
-            output_patches = tf.stack(output_patches)
-            output_patches = tf.reshape(output_patches, [1, num_patches, num_patches, patch_size_len])
+        # Pad inputs to make shape to handle edge patches, so as we can give context as input to generator (context around target patch)
+        inputs_bounded = tf.image.pad_to_bounding_box(inputs, 20, 20, a.scale_size + 40, a.scale_size + 40)
 
-            #Join all patches back
-            k = tf.constant(0.1, shape=[1, a.scale_size, a.scale_size, 3])
-            outputs = extract_patches_inverse(k, output_patches)
+        #Extract Patches
+        with tf.variable_scope("extract_patches"):
+            inputs_patches = extract_patches(inputs_bounded, ksizes, strides, rates)
 
-    # create two copies of discriminator, one for real pairs and one for fake pairs
-    # they share the same underlying variables
-    with tf.name_scope("real_discriminator"):
-        with tf.variable_scope("discriminator"):
-            # 2x [batch, height, width, channels] => [batch, 30, 30, 1]
-            predict_real = create_discriminator(inputs, targets)
+        with tf.name_scope("patches_generator"):
+            with tf.variable_scope("generator", reuse=tf.AUTO_REUSE):
+                output_patches = []
+                patch_size_len = 256*256*3
+                #Get output from each patch via same generator
+                for i in range(0, num_patches):
+                    for j in range(0, num_patches):
+                        patch = inputs_patches[0, i, j,]
+                        #patch_size_len = int(patch.get_shape()[0]) #defined above
+                        # reshape
+                        patch = tf.reshape(patch, [ksize_rows, ksize_cols, 3])
+                        patch = tf.expand_dims(patch,0)
+                        patch_output = create_generator(patch, out_channels)
+                        output_patches.append(tf.reshape(patch_output,[patch_size_len]))
+                output_patches = tf.stack(output_patches)
+                output_patches = tf.reshape(output_patches, [1, num_patches, num_patches, patch_size_len])
 
-    with tf.name_scope("fake_discriminator"):
-        with tf.variable_scope("discriminator", reuse=True):
-            # 2x [batch, height, width, channels] => [batch, 30, 30, 1]
-            predict_fake = create_discriminator(inputs, outputs)
+                #Join all patches back
+                k = tf.constant(0.1, shape=[1, a.scale_size, a.scale_size, 3])
+                outputs = extract_patches_inverse(k, output_patches)
 
-    with tf.name_scope("discriminator_loss"):
-        # minimizing -tf.log will try to get inputs to 1
-        # predict_real => 1
-        # predict_fake => 0
-        discrim_loss = tf.reduce_mean(-(tf.log(tf.clip_by_value((predict_real + EPS),1e-12,1.0)) + tf.log(tf.clip_by_value((1 - predict_fake + EPS),1e-12,1.0))))
+        # create two copies of discriminator, one for real pairs and one for fake pairs
+        # they share the same underlying variables
+        with tf.name_scope("real_discriminator"):
+            with tf.variable_scope("discriminator"):
+                # 2x [batch, height, width, channels] => [batch, 30, 30, 1]
+                predict_real = create_discriminator(inputs, targets)
 
-    with tf.name_scope("generator_loss"):
-        # predict_fake => 1
-        # abs(targets - outputs) => 0
-        gen_loss_GAN = tf.reduce_mean(-tf.log(tf.clip_by_value((predict_fake + EPS),1e-12,1.0)))
-        gen_loss_L1 = tf.reduce_mean(tf.abs(targets - outputs))
-        gen_loss = gen_loss_GAN * a.gan_weight + gen_loss_L1 * a.l1_weight
+        with tf.name_scope("fake_discriminator"):
+            with tf.variable_scope("discriminator", reuse=True):
+                # 2x [batch, height, width, channels] => [batch, 30, 30, 1]
+                predict_fake = create_discriminator(inputs, outputs)
 
-    with tf.name_scope("discriminator_train"):
-        discrim_tvars = [var for var in tf.trainable_variables() if var.name.startswith("discriminator")]
-        discrim_optim = tf.train.AdamOptimizer(a.lr, a.beta1)
-        discrim_grads_and_vars = discrim_optim.compute_gradients(discrim_loss, var_list=discrim_tvars)
-        discrim_train = discrim_optim.apply_gradients(discrim_grads_and_vars)
+        with tf.name_scope("discriminator_loss"):
+            # minimizing -tf.log will try to get inputs to 1
+            # predict_real => 1
+            # predict_fake => 0
+            discrim_loss = tf.reduce_mean(-(tf.log(tf.clip_by_value((predict_real + EPS),1e-12,1.0)) + tf.log(tf.clip_by_value((1 - predict_fake + EPS),1e-12,1.0))))
 
-    with tf.name_scope("generator_train"):
-        with tf.control_dependencies([discrim_train]):
-            gen_tvars = [var for var in tf.trainable_variables() if var.name.startswith("generator")]
-            gen_optim = tf.train.AdamOptimizer(a.lr, a.beta1)
-            gen_grads_and_vars = gen_optim.compute_gradients(gen_loss, var_list=gen_tvars)
-            gen_train = gen_optim.apply_gradients(gen_grads_and_vars)
+        with tf.name_scope("generator_loss"):
+            # predict_fake => 1
+            # abs(targets - outputs) => 0
+            gen_loss_GAN = tf.reduce_mean(-tf.log(tf.clip_by_value((predict_fake + EPS),1e-12,1.0)))
+            gen_loss_L1 = tf.reduce_mean(tf.abs(targets - outputs))
+            gen_loss = gen_loss_GAN * a.gan_weight + gen_loss_L1 * a.l1_weight
 
-    ema = tf.train.ExponentialMovingAverage(decay=0.99)
-    update_losses = ema.apply([discrim_loss, gen_loss_GAN, gen_loss_L1] + 8*[discrim_loss])
-    global_step = tf.train.get_or_create_global_step()
-    incr_global_step = tf.assign(global_step, global_step + 1)
+        with tf.name_scope("discriminator_train"):
+            discrim_tvars = [var for var in tf.trainable_variables() if var.name.startswith("discriminator")]
+            discrim_optim = tf.train.AdamOptimizer(a.lr, a.beta1)
+            discrim_grads_and_vars = discrim_optim.compute_gradients(discrim_loss, var_list=discrim_tvars)
+            discrim_train = discrim_optim.apply_gradients(discrim_grads_and_vars)
+
+        with tf.name_scope("generator_train"):
+            with tf.control_dependencies([discrim_train]):
+                gen_tvars = [var for var in tf.trainable_variables() if var.name.startswith("generator")]
+                gen_optim = tf.train.AdamOptimizer(a.lr, a.beta1)
+                gen_grads_and_vars = gen_optim.compute_gradients(gen_loss, var_list=gen_tvars)
+                gen_train = gen_optim.apply_gradients(gen_grads_and_vars)
+
+        ema = tf.train.ExponentialMovingAverage(decay=0.99)
+        update_losses = ema.apply([discrim_loss, gen_loss_GAN, gen_loss_L1] + 8*[discrim_loss])
+        global_step = tf.train.get_or_create_global_step()
+        incr_global_step = tf.assign(global_step, global_step + 1)
+        discrim_loss = ema.average(discrim_loss)
+        gen_loss_GAN=ema.average(gen_loss_GAN)
+        gen_loss_L1 = ema.average(gen_loss_L1)
+        train = tf.group(update_losses, incr_global_step, gen_train)
+    elif (a.mode == "test"):
+        predict_real = None
+        predict_fake = None
+        discrim_loss = None
+        discrim_grads_and_vars = None
+        gen_loss_GAN = None
+        gen_loss_L1 = None
+        gen_grads_and_vars = None
+        train = None
+        with tf.name_scope("patches_generator"):
+            with tf.variable_scope("generator", reuse=tf.AUTO_REUSE):
+                outputs = create_generator(inputs, out_channels)
+    else:
+        print("Give correct mode")
+        exit(0)
 
     return Model(
         predict_real=predict_real,
         predict_fake=predict_fake,
-        discrim_loss=ema.average(discrim_loss),
+        discrim_loss=discrim_loss,
         discrim_grads_and_vars=discrim_grads_and_vars,
-        gen_loss_GAN=ema.average(gen_loss_GAN),
-        gen_loss_L1=ema.average(gen_loss_L1),
+        gen_loss_GAN=gen_loss_GAN,
+        gen_loss_L1=gen_loss_L1,
         gen_grads_and_vars=gen_grads_and_vars,
         outputs=outputs,
-        train=tf.group(update_losses, incr_global_step, gen_train),
+        train=train
     )
 
 
@@ -528,7 +524,7 @@ def main():
             raise Exception("checkpoint required for test mode")
 
         # load some options from the checkpoint
-        options = {"which_direction", "ngf", "ndf", "lab_colorization"}
+        options = {"which_direction", "ngf", "ndf"}
         with open(os.path.join(a.checkpoint, "options.json")) as f:
             for key, val in json.loads(f.read()).items():
                 if key in options:
@@ -549,30 +545,12 @@ def main():
     # inputs and targets are [batch_size, height, width, channels]
     model = create_model(examples.inputs, examples.targets)
 
-    # undo colorization splitting on images that we use for display/output
-    if a.lab_colorization:
-        if a.which_direction == "AtoB":
-            # inputs is brightness, this will be handled fine as a grayscale image
-            # need to augment targets and outputs with brightness
-            targets = augment(examples.targets, examples.inputs)
-            outputs = augment(model.outputs, examples.inputs)
-            # inputs can be deprocessed normally and handled as if they are single channel
-            # grayscale images
-            inputs = deprocess(examples.inputs)
-        elif a.which_direction == "BtoA":
-            # inputs will be color channels only, get brightness from targets
-            inputs = augment(examples.inputs, examples.targets)
-            targets = deprocess(examples.targets)
-            outputs = deprocess(model.outputs)
-        else:
-            raise Exception("invalid direction")
+    inputs = deprocess(examples.inputs)
+    targets = deprocess(examples.targets)
+    if(a.mode == "train"):
+        outputs = deprocess(model.outputs)
     else:
-        inputs = deprocess(examples.inputs)
-        targets = deprocess(examples.targets)
-        if(a.mode == "train"):
-            outputs = deprocess(model.outputs)
-        else:
-            outputs = deprocess(model.outputs)
+        outputs = deprocess(model.outputs)
 
 
     def convert(image):

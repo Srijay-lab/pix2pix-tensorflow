@@ -5,17 +5,17 @@ from PIL import Image
 import matplotlib.pyplot as plt
 import matplotlib
 
-folder = "F:/Datasets/CRAG_LabServer/c1/Test/Grades/1/728_cropped/single/results_9d1g/images"
-outpath = "F:/Datasets/CRAG_LabServer/c1/Test/Grades/1/728_cropped/single/"
-outfile = os.path.join(outpath,"tissue_mask_synthetic-tmi-single-2.png")
+folder = "F:/Datasets/DigestPath/safron/test/single/results/images"
+outpath = "F:/Datasets/DigestPath/safron/test/single"
+outfile = os.path.join(outpath,"gen_46_tmi3_100_2.png")
 
 if not os.path.exists(outpath):
         os.makedirs(outpath)
 
 paths = glob.glob(os.path.join(folder,"*.png"))
 
-hight = 728
-width = 728
+hight = 4610
+width = 3546
 patch = 256
 
 image = np.zeros((hight,width,3))
